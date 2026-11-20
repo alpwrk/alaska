@@ -11,6 +11,7 @@ use crate::browser::{Browser, is_audio};
 use crate::meta::{self, TagCache, TrackMeta};
 use crate::player::Player;
 use crate::queue::Queue;
+use crate::state::State;
 use crate::ui;
 
 const TICK: Duration = Duration::from_millis(100);
@@ -42,7 +43,7 @@ pub struct App {
 
 impl App {
     pub fn new(start_dir: PathBuf) -> Result<Self> {
-        Ok(App {
+        let mut app = App {
             browser: Browser::new(start_dir),
             queue: Queue::default(),
             player: Player::new()?,
@@ -55,7 +56,34 @@ impl App {
             browser_state: ListState::default(),
             queue_state: ListState::default(),
             quit: false,
-        })
+        };
+        app.restore(State::load());
+        Ok(app)
+    }
+
+    /// Restore volume, modes and queue; the current track is loaded paused.
+    fn restore(&mut self, state: State) {
+        self.player.set_volume(state.volume);
+        self.queue.repeat = state.repeat;
+        self.queue.set_shuffle(state.shuffle);
+        self.cache.ensure(&state.queue);
+        self.queue.set(state.queue, state.current);
+        if let Some(i) = self.queue.current_index() {
+            self.queue_cursor = i;
+            let start = Duration::try_from_secs_f64(state.position_secs).unwrap_or_default();
+            self.load_current(start, true);
+        }
+    }
+
+    fn snapshot(&self) -> State {
+        State {
+            volume: self.player.volume(),
+            queue: self.queue.tracks().to_vec(),
+            current: self.queue.current_index(),
+            position_secs: self.player.position().as_secs_f64(),
+            shuffle: self.queue.shuffle(),
+            repeat: self.queue.repeat,
+        }
     }
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
@@ -77,6 +105,7 @@ impl App {
             }
             self.tick();
         }
+        self.snapshot().save()?;
         self.cache.save()
     }
 

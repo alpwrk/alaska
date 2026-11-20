@@ -5,6 +5,7 @@ mod meta;
 mod opus;
 mod player;
 mod queue;
+mod state;
 mod ui;
 
 use std::path::PathBuf;

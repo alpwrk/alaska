@@ -122,7 +122,8 @@ impl Player {
     }
 
     pub fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.0);
+        // Round to whole percent so repeated steps do not accumulate float drift.
+        self.volume = (volume.clamp(0.0, 1.0) * 100.0).round() / 100.0;
         if let Some(t) = &self.track {
             t.set_volume(self.volume);
         }
