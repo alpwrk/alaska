@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod browser;
 mod meta;
+mod mpris;
 mod opus;
 mod player;
 mod queue;

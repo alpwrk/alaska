@@ -5,10 +5,12 @@ use anyhow::Result;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::widgets::ListState;
+use souvlaki::{MediaControlEvent, SeekDirection};
 
 use crate::action::{Action, map_key};
 use crate::browser::{Browser, is_audio};
 use crate::meta::{self, TagCache, TrackMeta};
+use crate::mpris::{Mpris, Playback};
 use crate::player::Player;
 use crate::queue::Queue;
 use crate::state::State;
@@ -32,6 +34,7 @@ pub struct App {
     pub cache: TagCache,
     /// Directory whose tags were last loaded into the cache.
     meta_dir: Option<PathBuf>,
+    mpris: Option<Mpris>,
     pub focus: Focus,
     pub queue_cursor: usize,
     pub filter_mode: bool,
@@ -49,6 +52,7 @@ impl App {
             player: Player::new()?,
             cache: TagCache::load(),
             meta_dir: None,
+            mpris: Mpris::new(),
             focus: Focus::Browser,
             queue_cursor: 0,
             filter_mode: false,
@@ -104,6 +108,7 @@ impl App {
                 }
             }
             self.tick();
+            self.sync_mpris();
         }
         self.snapshot().save()?;
         self.cache.save()
@@ -132,6 +137,60 @@ impl App {
                 Some(_) => self.play_current(),
                 None => self.player.stop(),
             }
+        }
+    }
+
+    fn sync_mpris(&mut self) {
+        let Some(mpris) = &self.mpris else {
+            return;
+        };
+        let events: Vec<_> = mpris.events().collect();
+        for event in events {
+            self.handle_media_event(event);
+        }
+        let track = self
+            .queue
+            .current()
+            .filter(|_| self.player.is_loaded())
+            .cloned();
+        let playback = Playback {
+            meta: track.as_deref().and_then(|t| self.cache.get(t)),
+            track: track.as_deref(),
+            paused: self.player.is_paused(),
+            position: self.player.position(),
+            volume: self.player.volume(),
+        };
+        if let Some(mpris) = &mut self.mpris {
+            mpris.update(playback);
+        }
+    }
+
+    fn handle_media_event(&mut self, event: MediaControlEvent) {
+        let signed = |dir: SeekDirection, secs: i64| match dir {
+            SeekDirection::Forward => secs,
+            SeekDirection::Backward => -secs,
+        };
+        match event {
+            MediaControlEvent::Play => {
+                if self.player.is_loaded() {
+                    self.player.play();
+                } else {
+                    self.play_current();
+                }
+            }
+            MediaControlEvent::Pause | MediaControlEvent::Stop => self.player.pause(),
+            MediaControlEvent::Toggle => self.dispatch(Action::PlayPause),
+            MediaControlEvent::Next => self.dispatch(Action::Next),
+            MediaControlEvent::Previous => self.dispatch(Action::Prev),
+            MediaControlEvent::Seek(dir) => self.player.seek_by(signed(dir, SEEK_STEP)),
+            MediaControlEvent::SeekBy(dir, d) => {
+                self.player.seek_by(signed(dir, d.as_secs() as i64));
+            }
+            MediaControlEvent::SetPosition(pos) => self.player.seek_to(pos.0),
+            MediaControlEvent::SetVolume(v) => self.player.set_volume(v as f32),
+            MediaControlEvent::SetShuffle(on) => self.queue.set_shuffle(on),
+            MediaControlEvent::Quit => self.quit = true,
+            _ => {}
         }
     }
 
