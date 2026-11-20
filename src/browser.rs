@@ -48,6 +48,9 @@ impl Browser {
     /// Re-read the current directory. Shows directories and audio files only.
     pub fn reload(&mut self) {
         self.entries.clear();
+        // `visible` indexes into the old entries, so it must not survive a reload.
+        self.visible.clear();
+        self.cursor = 0;
         self.error = None;
         match fs::read_dir(&self.dir) {
             Ok(rd) => {
@@ -77,7 +80,6 @@ impl Browser {
 
     pub fn cd(&mut self, dir: PathBuf) {
         self.dir = dir;
-        self.cursor = 0;
         self.reload();
     }
 
@@ -226,6 +228,22 @@ mod tests {
         assert!(fuzzy_match("DARK moon", "dark side of the moon"));
         assert!(!fuzzy_match("xyz", "dark side"));
         assert!(!fuzzy_match("nm", "moon"));
+    }
+
+    #[test]
+    fn parent_after_moving_cursor_selects_previous_dir() {
+        let root = std::env::temp_dir().join(format!("alaska-test-{}", std::process::id()));
+        let sub = root.join("b");
+        fs::create_dir_all(&sub).unwrap();
+        fs::create_dir_all(root.join("a")).unwrap();
+        for f in ["1.mp3", "2.mp3", "3.mp3", "4.mp3"] {
+            fs::write(sub.join(f), b"").unwrap();
+        }
+        let mut b = Browser::new(sub.clone());
+        b.move_by(3);
+        b.parent();
+        assert_eq!(b.selected().unwrap().path, sub);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
