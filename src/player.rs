@@ -6,6 +6,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 
+use crate::meta::TrackMeta;
+use crate::opus::OpusSource;
+
 /// Thin wrapper around a rodio output device and a per-track `rodio::Player`.
 pub struct Player {
     device: MixerDeviceSink,
@@ -127,6 +130,27 @@ impl Player {
 }
 
 fn open_source(path: &Path) -> Result<Box<dyn Source + Send>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if ext == "opus" {
+        return open_opus(path);
+    }
+    match open_symphonia(path, &ext) {
+        // Ogg files may contain Opus, which symphonia cannot decode.
+        Err(e) if ext == "ogg" || ext == "oga" => open_opus(path).map_err(|_| e),
+        result => result,
+    }
+}
+
+fn open_opus(path: &Path) -> Result<Box<dyn Source + Send>> {
+    let duration = TrackMeta::read(path).duration();
+    Ok(Box::new(OpusSource::open(path, duration)?))
+}
+
+fn open_symphonia(path: &Path, ext: &str) -> Result<Box<dyn Source + Send>> {
     let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
     let len = file.metadata()?.len();
     let mut builder = Decoder::builder()
@@ -134,7 +158,7 @@ fn open_source(path: &Path) -> Result<Box<dyn Source + Send>> {
         .with_byte_len(len)
         .with_seekable(true)
         .with_gapless(true);
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+    if !ext.is_empty() {
         builder = builder.with_hint(ext);
     }
     let decoder = builder

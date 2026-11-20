@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod browser;
 mod meta;
+mod opus;
 mod player;
 mod queue;
 mod ui;
