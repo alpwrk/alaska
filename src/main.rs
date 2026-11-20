@@ -1,6 +1,7 @@
 mod action;
 mod app;
 mod browser;
+mod meta;
 mod player;
 mod queue;
 mod ui;

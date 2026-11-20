@@ -8,6 +8,7 @@ use ratatui::widgets::ListState;
 
 use crate::action::{Action, map_key};
 use crate::browser::{Browser, is_audio};
+use crate::meta::{self, TagCache, TrackMeta};
 use crate::player::Player;
 use crate::queue::Queue;
 use crate::ui;
@@ -27,6 +28,9 @@ pub struct App {
     pub browser: Browser,
     pub queue: Queue,
     pub player: Player,
+    pub cache: TagCache,
+    /// Directory whose tags were last loaded into the cache.
+    meta_dir: Option<PathBuf>,
     pub focus: Focus,
     pub queue_cursor: usize,
     pub filter_mode: bool,
@@ -42,6 +46,8 @@ impl App {
             browser: Browser::new(start_dir),
             queue: Queue::default(),
             player: Player::new()?,
+            cache: TagCache::load(),
+            meta_dir: None,
             focus: Focus::Browser,
             queue_cursor: 0,
             filter_mode: false,
@@ -54,6 +60,7 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         while !self.quit {
+            self.refresh_meta();
             terminal.draw(|frame| ui::draw(frame, self))?;
             if event::poll(TICK)? {
                 // Drain all pending input before redrawing to stay responsive.
@@ -70,14 +77,24 @@ impl App {
             }
             self.tick();
         }
-        Ok(())
+        self.cache.save()
+    }
+
+    /// Load tags for the files of a newly entered directory.
+    fn refresh_meta(&mut self) {
+        if self.meta_dir.as_ref() != Some(&self.browser.dir) {
+            self.cache.ensure(&self.browser.audio_files());
+            self.meta_dir = Some(self.browser.dir.clone());
+        }
+    }
+
+    pub fn meta(&self, path: &Path) -> Option<&TrackMeta> {
+        self.cache.get(path)
     }
 
     /// Display name for a track.
     pub fn track_name(&self, path: &Path) -> String {
-        path.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default()
+        meta::label(path, self.meta(path))
     }
 
     fn tick(&mut self) {

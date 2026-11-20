@@ -43,6 +43,7 @@ fn highlight(focused: bool) -> Style {
 fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Browser;
     let playing = app.queue.current();
+    let inner_width = area.width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = app
         .browser
         .visible()
@@ -55,7 +56,7 @@ fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
                 } else {
                     Style::new()
                 };
-                ListItem::new(app.track_name(&e.path)).style(style)
+                ListItem::new(track_row(app, &e.path, "", inner_width)).style(style)
             }
         })
         .collect();
@@ -91,17 +92,18 @@ fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Queue;
     let current = app.queue.current_index();
+    let inner_width = area.width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = app
         .queue
         .tracks()
         .iter()
         .enumerate()
         .map(|(i, path)| {
-            let name = app.track_name(path);
             if Some(i) == current {
-                ListItem::new(format!("▶ {name}")).style(Style::new().fg(Color::Green).bold())
+                ListItem::new(track_row(app, path, "▶ ", inner_width))
+                    .style(Style::new().fg(Color::Green).bold())
             } else {
-                ListItem::new(format!("  {name}"))
+                ListItem::new(track_row(app, path, "  ", inner_width))
             }
         })
         .collect();
@@ -128,17 +130,23 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Layout::vertical([Constraint::Length(1); 3]).areas(inner);
 
     // Line 1: what is playing.
-    let (icon, title) = match app.queue.current().filter(|_| app.player.is_loaded()) {
+    let (icon, title, album) = match app.queue.current().filter(|_| app.player.is_loaded()) {
         Some(path) => {
             let icon = if app.player.is_paused() { "⏸" } else { "▶" };
-            (icon, app.track_name(path))
+            let album = app
+                .meta(path)
+                .and_then(|m| m.album.clone())
+                .map(|a| format!("  ·  {a}"))
+                .unwrap_or_default();
+            (icon, app.track_name(path), album)
         }
-        None => ("■", "Nothing playing".to_string()),
+        None => ("■", "Nothing playing".to_string(), String::new()),
     };
     frame.render_widget(
         Line::from(vec![
             Span::raw(format!(" {icon} ")).fg(Color::Green).bold(),
             Span::raw(title).bold(),
+            Span::raw(album).fg(Color::DarkGray),
         ]),
         title_area,
     );
@@ -179,6 +187,20 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         info.push(Span::raw(format!("  {msg}")).fg(Color::Red));
     }
     frame.render_widget(Line::from(info), info_area);
+}
+
+/// "prefix + label" with the track duration right-aligned in `width` columns.
+fn track_row(app: &App, path: &Path, prefix: &str, width: usize) -> String {
+    let label = format!("{prefix}{}", app.track_name(path));
+    let Some(duration) = app.meta(path).and_then(|m| m.duration()) else {
+        return label;
+    };
+    let time = fmt_time(duration);
+    let used = Span::raw(label.as_str()).width() + time.len() + 1;
+    if used > width {
+        return label;
+    }
+    format!("{label}{}{time}", " ".repeat(width - used + 1))
 }
 
 /// Path with `~` for the home dir, cut from the left to fit `max` chars.
