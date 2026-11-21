@@ -6,6 +6,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, LineGauge, List, ListItem, Paragraph};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, Focus};
 
@@ -196,11 +197,34 @@ fn track_row(app: &App, path: &Path, prefix: &str, width: usize) -> String {
         return label;
     };
     let time = fmt_time(duration);
-    let used = Span::raw(label.as_str()).width() + time.len() + 1;
-    if used > width {
+    // Keep at least one space between label and time; shorten the label, not the time.
+    let Some(max_label) = width.checked_sub(time.len() + 1) else {
         return label;
+    };
+    let label = truncate(&label, max_label);
+    let pad = width - label.width() - time.len();
+    format!("{label}{}{time}", " ".repeat(pad))
+}
+
+/// Cut `s` to at most `max` display columns, ending in "…" if shortened.
+fn truncate(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
     }
-    format!("{label}{}{time}", " ".repeat(width - used + 1))
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > max {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    if max > 0 {
+        out.push('…');
+    }
+    out
 }
 
 /// Path with `~` for the home dir, cut from the left to fit `max` chars.
@@ -225,5 +249,20 @@ pub fn fmt_time(d: Duration) -> String {
         format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
     } else {
         format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_respects_display_width() {
+        assert_eq!(truncate("short", 10), "short");
+        assert_eq!(truncate("a very long title", 8), "a very …");
+        assert_eq!(truncate("a very long title", 8).width(), 8);
+        // Wide (CJK) chars take two columns each.
+        assert_eq!(truncate("日本語の曲", 5), "日本…");
+        assert_eq!(truncate("abc", 0), "");
     }
 }

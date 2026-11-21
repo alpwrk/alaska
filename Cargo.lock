@@ -33,6 +33,7 @@ dependencies = [
  "serde",
  "serde_json",
  "souvlaki",
+ "unicode-width",
 ]
 
 [[package]]
