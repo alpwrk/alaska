@@ -75,7 +75,14 @@ pub struct App {
     pub message: Option<String>,
     pub browser_state: ListState,
     pub queue_state: ListState,
+    scrobble: Option<Scrobble>,
     quit: bool,
+}
+
+/// Scrobble progress of the playing remote track.
+struct Scrobble {
+    id: String,
+    submitted: bool,
 }
 
 impl App {
@@ -102,6 +109,7 @@ impl App {
             message: config_error,
             browser_state: ListState::default(),
             queue_state: ListState::default(),
+            scrobble: None,
             quit: false,
         };
         app.restore(State::load());
@@ -249,10 +257,52 @@ impl App {
         {
             self.logged_in(client);
         }
+        self.update_scrobble();
         if self.player.is_finished() {
             match self.queue_mut().advance(true) {
                 Some(_) => self.play_current(),
                 None => self.player.stop(),
+            }
+        }
+    }
+
+    /// Report "now playing" when a remote track starts, and a play once it has
+    /// run for half its length or 4 minutes (the Last.fm rule).
+    fn update_scrobble(&mut self) {
+        if !self.player.is_loaded() || self.player.is_paused() {
+            return;
+        }
+        let Some(Track::Remote(song)) = self.queue().current().cloned() else {
+            return;
+        };
+        let Some(client) = self.client().cloned() else {
+            return;
+        };
+        let send = |id: String, submission: bool| {
+            let client = client.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = client.scrobble(&id, submission) {
+                    // stderr goes to the log file while the TUI runs.
+                    eprintln!("scrobble failed: {e:#}");
+                }
+            });
+        };
+        match &mut self.scrobble {
+            Some(s) if s.id == song.id => {
+                let threshold = song.duration().map_or(Duration::from_secs(240), |d| {
+                    (d / 2).min(Duration::from_secs(240))
+                });
+                if !s.submitted && self.player.position() >= threshold {
+                    s.submitted = true;
+                    send(song.id.clone(), true);
+                }
+            }
+            _ => {
+                send(song.id.clone(), false);
+                self.scrobble = Some(Scrobble {
+                    id: song.id.clone(),
+                    submitted: false,
+                });
             }
         }
     }
@@ -629,6 +679,8 @@ impl App {
             return;
         };
         let client = self.client().cloned();
+        // Every new playback (also repeat-one) is scrobbled again.
+        self.scrobble = None;
         if let Err(e) = self.player.load(&track, client.as_ref(), start, paused) {
             self.message = Some(format!("{e:#}"));
             self.player.stop();
