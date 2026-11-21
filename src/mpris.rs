@@ -1,6 +1,5 @@
 //! MPRIS integration: media keys, playerctl and desktop widgets.
 
-use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -8,7 +7,8 @@ use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
 };
 
-use crate::meta::TrackMeta;
+use crate::meta::TagCache;
+use crate::track::Track;
 
 /// How often the reported position is refreshed while playing.
 const POSITION_INTERVAL: Duration = Duration::from_secs(1);
@@ -23,7 +23,7 @@ enum Status {
 pub struct Mpris {
     controls: MediaControls,
     events: Receiver<MediaControlEvent>,
-    track: Option<PathBuf>,
+    track: Option<Track>,
     status: Status,
     volume: f32,
     last_position: Duration,
@@ -32,8 +32,8 @@ pub struct Mpris {
 
 /// Snapshot of what the player is doing, pushed to MPRIS each tick.
 pub struct Playback<'a> {
-    pub track: Option<&'a Path>,
-    pub meta: Option<&'a TrackMeta>,
+    pub track: Option<&'a Track>,
+    pub cache: &'a TagCache,
     pub paused: bool,
     pub position: Duration,
     pub volume: f32,
@@ -72,19 +72,23 @@ impl Mpris {
 
     /// Push changes to the bus. Cheap when nothing changed.
     pub fn update(&mut self, p: Playback) {
-        let track_changed = self.track.as_deref() != p.track;
+        let track_changed = self.track.as_ref() != p.track;
         if track_changed {
-            self.track = p.track.map(Path::to_path_buf);
-            let fallback = p
-                .track
-                .and_then(Path::file_stem)
-                .map(|s| s.to_string_lossy().into_owned());
-            let meta = p.meta.cloned().unwrap_or_default();
+            self.track = p.track.cloned();
+            let (title, artist, album, duration) = match p.track {
+                Some(t) => (
+                    t.title(p.cache),
+                    t.artist(p.cache),
+                    t.album(p.cache),
+                    t.duration(p.cache),
+                ),
+                None => (None, None, None, None),
+            };
             let _ = self.controls.set_metadata(MediaMetadata {
-                title: meta.title.as_deref().or(fallback.as_deref()),
-                artist: meta.artist.as_deref(),
-                album: meta.album.as_deref(),
-                duration: meta.duration(),
+                title: title.as_deref(),
+                artist: artist.as_deref(),
+                album: album.as_deref(),
+                duration,
                 cover_url: None,
             });
         }

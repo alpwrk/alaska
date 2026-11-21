@@ -1,9 +1,7 @@
 //! Ogg Opus decoding via libopus (symphonia has no Opus decoder).
 
-use std::fs::File;
-use std::io::BufReader;
+use std::io::{Read, Seek};
 use std::num::NonZero;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,8 +15,8 @@ const RATE: u32 = 48_000;
 /// Largest Opus frame: 120 ms at 48 kHz.
 const MAX_FRAME: usize = 5760;
 
-pub struct OpusSource {
-    reader: PacketReader<BufReader<File>>,
+pub struct OpusSource<R: Read + Seek> {
+    reader: PacketReader<R>,
     decoder: opus::Decoder,
     serial: u32,
     channels: u16,
@@ -31,10 +29,9 @@ pub struct OpusSource {
     done: bool,
 }
 
-impl OpusSource {
-    pub fn open(path: &Path, duration: Option<Duration>) -> Result<Self> {
-        let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-        let mut reader = PacketReader::new(BufReader::new(file));
+impl<R: Read + Seek> OpusSource<R> {
+    pub fn new(input: R, duration: Option<Duration>) -> Result<Self> {
+        let mut reader = PacketReader::new(input);
 
         let head = reader.read_packet()?.context("empty ogg stream")?;
         let data = &head.data;
@@ -99,7 +96,7 @@ impl OpusSource {
     }
 }
 
-impl Iterator for OpusSource {
+impl<R: Read + Seek> Iterator for OpusSource<R> {
     type Item = Sample;
 
     fn next(&mut self) -> Option<Sample> {
@@ -116,7 +113,7 @@ impl Iterator for OpusSource {
     }
 }
 
-impl Source for OpusSource {
+impl<R: Read + Seek> Source for OpusSource<R> {
     fn current_span_len(&self) -> Option<usize> {
         if self.done { Some(0) } else { None }
     }

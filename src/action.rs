@@ -26,6 +26,8 @@ pub enum Action {
     Remove,
     MoveDown,
     MoveUp,
+    ToggleMode,
+    Login,
     Quit,
 }
 
@@ -65,6 +67,8 @@ pub fn map_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('d') | KeyCode::Delete => Remove,
         KeyCode::Char('J') => MoveDown,
         KeyCode::Char('K') => MoveUp,
+        KeyCode::Char('m') => ToggleMode,
+        KeyCode::Char('L') => Login,
         KeyCode::Char('q') => Quit,
         _ => return None,
     })

@@ -2,13 +2,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, LineGauge, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, LineGauge, List, ListItem, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, Focus};
+use crate::app::{App, Focus, Mode, Prompt};
+use crate::login::{LABELS, Login};
+use crate::remote::{Entry, Remote};
+use crate::track::Track;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, status] =
@@ -16,9 +19,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(main);
 
-    draw_browser(frame, app, left);
+    match app.mode {
+        Mode::Local => draw_browser(frame, app, left),
+        Mode::Remote => draw_remote(frame, app, left),
+    }
     draw_queue(frame, app, right);
     draw_status(frame, app, status);
+    if let Some(login) = &app.login {
+        draw_login(frame, login);
+    }
 }
 
 fn pane_block(title: Line<'static>, focused: bool) -> Block<'static> {
@@ -41,9 +50,17 @@ fn highlight(focused: bool) -> Style {
     }
 }
 
+fn prompt_line(label: &str, text: &str, active: bool) -> Line<'static> {
+    let cursor = if active { "█" } else { "" };
+    Line::from(vec![
+        Span::raw(format!(" {label}")).fg(Color::Yellow),
+        Span::raw(format!("{text}{cursor} ")),
+    ])
+}
+
 fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Browser;
-    let playing = app.queue.current();
+    let playing = app.queue().current().and_then(Track::local_path);
     let inner_width = area.width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = app
         .browser
@@ -52,12 +69,13 @@ fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
             if e.is_dir {
                 ListItem::new(format!("{}/", e.name)).style(Style::new().fg(Color::Blue).bold())
             } else {
-                let style = if Some(&e.path) == playing {
+                let style = if Some(e.path.as_path()) == playing {
                     Style::new().fg(Color::Green)
                 } else {
                     Style::new()
                 };
-                ListItem::new(track_row(app, &e.path, "", inner_width)).style(style)
+                let track = Track::Local(e.path.clone());
+                ListItem::new(track_row(app, &track, "", inner_width)).style(style)
             }
         })
         .collect();
@@ -70,12 +88,9 @@ fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
         .bold(),
         focused,
     );
-    if app.filter_mode || !app.browser.filter.is_empty() {
-        let cursor = if app.filter_mode { "█" } else { "" };
-        block = block.title_bottom(Line::from(vec![
-            Span::raw(" /").fg(Color::Yellow),
-            Span::raw(format!("{}{cursor} ", app.browser.filter)),
-        ]));
+    let filtering = app.prompt == Some(Prompt::Filter);
+    if filtering || !app.browser.filter.is_empty() {
+        block = block.title_bottom(prompt_line("/", &app.browser.filter, filtering));
     }
     if let Some(err) = &app.browser.error {
         frame.render_widget(Paragraph::new(err.as_str().red()).block(block), area);
@@ -90,34 +105,118 @@ fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.browser_state);
 }
 
+fn draw_remote(frame: &mut Frame, app: &mut App, area: Rect) {
+    let focused = app.focus == Focus::Browser;
+    let Some(remote) = &app.remote else {
+        let block = pane_block(Line::from(" ⛁ OpenSubsonic ").bold(), focused);
+        let hint = Paragraph::new(" Not connected. Press L to log in.").block(block);
+        frame.render_widget(hint, area);
+        return;
+    };
+    let width = area.width.saturating_sub(2) as usize;
+    let title = format!(" ⛁ {} › {} ", remote.client.server_name(), remote.path());
+    let mut block = pane_block(
+        // Cut from the left so the current location stays visible.
+        Line::from(truncate_left(&title, area.width.saturating_sub(4) as usize)).bold(),
+        focused,
+    );
+    if app.prompt == Some(Prompt::Search) {
+        block = block.title_bottom(prompt_line("search: ", &app.search_input, true));
+    } else if remote.loading.is_some() {
+        block = block.title_bottom(Line::from(" loading… ").fg(Color::Yellow));
+    }
+
+    let Some(view) = remote.view() else {
+        let text = if remote.loading.is_some() {
+            " Loading…"
+        } else {
+            ""
+        };
+        frame.render_widget(Paragraph::new(text).block(block), area);
+        return;
+    };
+    if view.entries.is_empty() {
+        frame.render_widget(Paragraph::new(" Nothing found.").block(block), area);
+        return;
+    }
+    let items = remote_items(app, remote, width);
+    let cursor = view.cursor;
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(highlight(focused));
+    app.browser_state.select(Some(cursor));
+    frame.render_stateful_widget(list, area, &mut app.browser_state);
+}
+
+fn remote_items(app: &App, remote: &Remote, width: usize) -> Vec<ListItem<'static>> {
+    let playing = match app.queue().current() {
+        Some(Track::Remote(song)) => Some(song.id.as_str()),
+        _ => None,
+    };
+    let Some(view) = remote.view() else {
+        return Vec::new();
+    };
+    view.entries
+        .iter()
+        .map(|entry| match entry {
+            Entry::Header(name) => ListItem::new(format!("── {name} ──"))
+                .style(Style::new().fg(Color::DarkGray).bold()),
+            Entry::Artist(a) => {
+                let count = a.album_count.map(|n| n.to_string()).unwrap_or_default();
+                ListItem::new(row(&format!("{}/", a.name), &count, width))
+                    .style(Style::new().fg(Color::Blue).bold())
+            }
+            Entry::Album(a) => {
+                let mut label = format!("{}/", a.name);
+                if let Some(artist) = &a.artist
+                    && view.title != *artist
+                {
+                    label = format!("{}/ – {artist}", a.name);
+                }
+                let year = a.year.map(|y| y.to_string()).unwrap_or_default();
+                ListItem::new(row(&label, &year, width)).style(Style::new().fg(Color::Blue))
+            }
+            Entry::Song(song) => {
+                let style = if Some(song.id.as_str()) == playing {
+                    Style::new().fg(Color::Green)
+                } else {
+                    Style::new()
+                };
+                let track = Track::Remote(song.clone());
+                ListItem::new(track_row(app, &track, "", width)).style(style)
+            }
+        })
+        .collect()
+}
+
 fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::Queue;
-    let current = app.queue.current_index();
+    let queue = app.queue();
+    let current = queue.current_index();
     let inner_width = area.width.saturating_sub(2) as usize;
-    let items: Vec<ListItem> = app
-        .queue
+    let items: Vec<ListItem> = queue
         .tracks()
         .iter()
         .enumerate()
-        .map(|(i, path)| {
+        .map(|(i, track)| {
             if Some(i) == current {
-                ListItem::new(track_row(app, path, "▶ ", inner_width))
+                ListItem::new(track_row(app, track, "▶ ", inner_width))
                     .style(Style::new().fg(Color::Green).bold())
             } else {
-                ListItem::new(track_row(app, path, "  ", inner_width))
+                ListItem::new(track_row(app, track, "  ", inner_width))
             }
         })
         .collect();
 
-    let mut title = format!(" Queue ({}) ", app.queue.len());
-    if let Some(i) = current {
-        title = format!(" Queue ({}/{}) ", i + 1, app.queue.len());
-    }
+    let title = match current {
+        Some(i) => format!(" Queue ({}/{}) ", i + 1, queue.len()),
+        None => format!(" Queue ({}) ", queue.len()),
+    };
+    let selected = (!queue.is_empty()).then_some(app.session().cursor);
     let list = List::new(items)
         .block(pane_block(Line::from(title).bold(), focused))
         .highlight_style(highlight(focused));
-    app.queue_state
-        .select((!app.queue.is_empty()).then_some(app.queue_cursor));
+    app.queue_state.select(selected);
     frame.render_stateful_widget(list, area, &mut app.queue_state);
 }
 
@@ -131,15 +230,15 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Layout::vertical([Constraint::Length(1); 3]).areas(inner);
 
     // Line 1: what is playing.
-    let (icon, title, album) = match app.queue.current().filter(|_| app.player.is_loaded()) {
-        Some(path) => {
+    let current = app.queue().current().filter(|_| app.player.is_loaded());
+    let (icon, title, album) = match current {
+        Some(track) => {
             let icon = if app.player.is_paused() { "⏸" } else { "▶" };
-            let album = app
-                .meta(path)
-                .and_then(|m| m.album.clone())
+            let album = track
+                .album(&app.cache)
                 .map(|a| format!("  ·  {a}"))
                 .unwrap_or_default();
-            (icon, app.track_name(path), album)
+            (icon, app.label(track), album)
         }
         None => ("■", "Nothing playing".to_string(), String::new()),
     };
@@ -154,7 +253,10 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
 
     // Line 2: progress.
     let pos = app.player.position();
-    let duration = app.player.duration();
+    let duration = app
+        .player
+        .duration()
+        .or_else(|| current.and_then(|t| app.track_duration(t)));
     let ratio = match duration {
         Some(d) if !d.is_zero() => (pos.as_secs_f64() / d.as_secs_f64()).clamp(0.0, 1.0),
         _ => 0.0,
@@ -172,17 +274,25 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         gauge_area,
     );
 
-    // Line 3: volume, modes, messages.
+    // Line 3: mode, volume, shuffle/repeat, messages.
     let on_off = |b: bool| if b { "on" } else { "off" };
+    let mode = match app.mode {
+        Mode::Local => " LOCAL ",
+        Mode::Remote => " OSS ",
+    };
     let mut info = vec![
+        Span::raw(" "),
+        Span::raw(mode)
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::REVERSED),
         Span::raw(format!(
-            " vol {:>3}%",
+            "  vol {:>3}%",
             (app.player.volume() * 100.0).round() as u32
         )),
         Span::raw("  shuffle ").fg(Color::DarkGray),
-        Span::raw(on_off(app.queue.shuffle())),
+        Span::raw(on_off(app.queue().shuffle())),
         Span::raw("  repeat ").fg(Color::DarkGray),
-        Span::raw(app.queue.repeat.label()),
+        Span::raw(app.queue().repeat.label()),
     ];
     if let Some(msg) = &app.message {
         info.push(Span::raw(format!("  {msg}")).fg(Color::Red));
@@ -190,20 +300,96 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Line::from(info), info_area);
 }
 
+fn draw_login(frame: &mut Frame, login: &Login) {
+    let [area] = Layout::horizontal([Constraint::Length(64)])
+        .flex(Flex::Center)
+        .areas(frame.area());
+    let [area] = Layout::vertical([Constraint::Length(10)])
+        .flex(Flex::Center)
+        .areas(area);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(Color::Cyan))
+        .title(Line::from(" ⛁ OpenSubsonic login ").bold());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let field_width = inner.width.saturating_sub(15) as usize;
+    let mut lines = vec![Line::raw("")];
+    for (i, label) in LABELS.iter().enumerate() {
+        let value = if i == 2 {
+            "•".repeat(login.fields[i].chars().count())
+        } else {
+            login.fields[i].clone()
+        };
+        let focused = i == login.focus;
+        let cursor = if focused { "█" } else { "" };
+        let shown = truncate_left(&format!("{value}{cursor}"), field_width);
+        let value_style = if focused {
+            Style::new().add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::new()
+        };
+        lines.push(Line::from(vec![
+            Span::raw(format!(" {label:<12} ")).fg(if focused {
+                Color::Cyan
+            } else {
+                Color::DarkGray
+            }),
+            Span::styled(shown, value_style),
+        ]));
+    }
+    lines.push(Line::raw(""));
+    lines.push(match (&login.error, login.is_checking()) {
+        (_, true) => Line::from(" Connecting…").fg(Color::Yellow),
+        (Some(err), false) => Line::from(format!(" {err}")).fg(Color::Red),
+        (None, false) => Line::raw(""),
+    });
+    lines.push(
+        Line::from(" Enter: next / log in   Tab: switch field   Esc: cancel").fg(Color::DarkGray),
+    );
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Keep the end of `s` (where the cursor is) within `max` columns.
+fn truncate_left(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    let mut out: Vec<char> = Vec::new();
+    let mut used = 1; // room for "…"
+    for c in s.chars().rev() {
+        let w = c.width().unwrap_or(0);
+        if used + w > max {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out.push('…');
+    out.into_iter().rev().collect()
+}
+
 /// "prefix + label" with the track duration right-aligned in `width` columns.
-fn track_row(app: &App, path: &Path, prefix: &str, width: usize) -> String {
-    let label = format!("{prefix}{}", app.track_name(path));
-    let Some(duration) = app.meta(path).and_then(|m| m.duration()) else {
-        return label;
+fn track_row(app: &App, track: &Track, prefix: &str, width: usize) -> String {
+    let label = format!("{prefix}{}", app.label(track));
+    let time = app.track_duration(track).map(fmt_time).unwrap_or_default();
+    row(&label, &time, width)
+}
+
+/// `left` and `right` in `width` columns; `left` is shortened so `right` stays visible.
+fn row(left: &str, right: &str, width: usize) -> String {
+    if right.is_empty() {
+        return truncate(left, width);
+    }
+    // Keep at least one space between both parts.
+    let Some(max_left) = width.checked_sub(right.width() + 1) else {
+        return truncate(left, width);
     };
-    let time = fmt_time(duration);
-    // Keep at least one space between label and time; shorten the label, not the time.
-    let Some(max_label) = width.checked_sub(time.len() + 1) else {
-        return label;
-    };
-    let label = truncate(&label, max_label);
-    let pad = width - label.width() - time.len();
-    format!("{label}{}{time}", " ".repeat(pad))
+    let left = truncate(left, max_left);
+    let pad = width - left.width() - right.width();
+    format!("{left}{}{right}", " ".repeat(pad))
 }
 
 /// Cut `s` to at most `max` display columns, ending in "…" if shortened.

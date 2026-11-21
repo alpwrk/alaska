@@ -7,7 +7,9 @@ edition = "2024"
 anyhow = "1.0.104"
 crossterm = "0.29.0"
 dirs = "7.0.0"
+libc = "0.2.191"
 lofty = "0.25.5"
+md-5 = "0.11"
 ogg = "0.9.2"
 opus = "0.4.0"
 rand = "0.10.4"
@@ -16,7 +18,9 @@ rodio = { version = "0.23.0", default-features = false, features = ["playback", 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
+toml = "1"
 unicode-width = "0.2"
+ureq = "3"
 
 [profile.release]
 lto = "thin"

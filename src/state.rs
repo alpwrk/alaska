@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::meta::write_atomic;
 use crate::queue::Repeat;
+use crate::subsonic::Song;
 
 /// Player state persisted between runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -13,6 +14,18 @@ use crate::queue::Repeat;
 pub struct State {
     pub volume: f32,
     pub queue: Vec<PathBuf>,
+    pub current: Option<usize>,
+    pub position_secs: f64,
+    pub shuffle: bool,
+    pub repeat: Repeat,
+    /// Queue of the OpenSubsonic mode, kept separately from the local one.
+    pub remote: RemoteState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteState {
+    pub queue: Vec<Song>,
     pub current: Option<usize>,
     pub position_secs: f64,
     pub shuffle: bool,
@@ -28,6 +41,7 @@ impl Default for State {
             position_secs: 0.0,
             shuffle: false,
             repeat: Repeat::Off,
+            remote: RemoteState::default(),
         }
     }
 }
@@ -79,6 +93,21 @@ mod tests {
             position_secs: 12.5,
             shuffle: true,
             repeat: Repeat::All,
+            remote: RemoteState {
+                queue: vec![Song {
+                    id: "s1".into(),
+                    title: "Song".into(),
+                    artist: None,
+                    album: None,
+                    track: Some(1),
+                    duration: Some(60),
+                    suffix: Some("flac".into()),
+                }],
+                current: Some(0),
+                position_secs: 1.5,
+                shuffle: false,
+                repeat: Repeat::One,
+            },
         };
         let json = serde_json::to_string(&state).unwrap();
         assert_eq!(serde_json::from_str::<State>(&json).unwrap(), state);

@@ -1,6 +1,5 @@
 use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -8,6 +7,10 @@ use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source};
 
 use crate::meta::TrackMeta;
 use crate::opus::OpusSource;
+use crate::prefetch::Prefetch;
+use crate::subsonic::Client;
+use crate::subsonic::stream::HttpStream;
+use crate::track::Track;
 
 /// Thin wrapper around a rodio output device and a per-track `rodio::Player`.
 pub struct Player {
@@ -31,9 +34,15 @@ impl Player {
     }
 
     /// Replace the current track with `path`, starting at `start`.
-    pub fn load(&mut self, path: &Path, start: Duration, paused: bool) -> Result<()> {
+    pub fn load(
+        &mut self,
+        track: &Track,
+        client: Option<&Client>,
+        start: Duration,
+        paused: bool,
+    ) -> Result<()> {
         self.stop();
-        let source = open_source(path)?;
+        let source = open_source(track, client)?;
         self.duration = source.total_duration();
 
         let track = rodio::Player::connect_new(self.device.mixer());
@@ -130,40 +139,75 @@ impl Player {
     }
 }
 
-fn open_source(path: &Path) -> Result<Box<dyn Source + Send>> {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    if ext == "opus" {
-        return open_opus(path);
-    }
-    match open_symphonia(path, &ext) {
-        // Ogg files may contain Opus, which symphonia cannot decode.
-        Err(e) if ext == "ogg" || ext == "oga" => open_opus(path).map_err(|_| e),
-        result => result,
+fn open_source(track: &Track, client: Option<&Client>) -> Result<Box<dyn Source + Send>> {
+    match track {
+        Track::Local(path) => {
+            let file =
+                File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+            let len = file.metadata()?.len();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .unwrap_or_default();
+            let duration = || TrackMeta::read(path).duration();
+            open_input(BufReader::new(file), Some(len), &ext, duration)
+                .with_context(|| format!("cannot play {}", path.display()))
+        }
+        Track::Remote(song) => {
+            let client = client.context("not connected to a server")?;
+            let stream = HttpStream::open(client.agent(), &client.stream_url(&song.id))?;
+            let len = stream.len();
+            let ext = song
+                .suffix
+                .as_deref()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let source = open_input(stream, len, &ext, || song.duration())
+                .with_context(|| format!("cannot play {}", song.title))?;
+            // Network reads may stall; keep them off the audio thread.
+            Ok(Box::new(Prefetch::new(source)))
+        }
     }
 }
 
-fn open_opus(path: &Path) -> Result<Box<dyn Source + Send>> {
-    let duration = TrackMeta::read(path).duration();
-    Ok(Box::new(OpusSource::open(path, duration)?))
-}
-
-fn open_symphonia(path: &Path, ext: &str) -> Result<Box<dyn Source + Send>> {
-    let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    let len = file.metadata()?.len();
+/// Pick a decoder for `input`: libopus for Opus, symphonia for everything else.
+fn open_input<R>(
+    mut input: R,
+    byte_len: Option<u64>,
+    ext: &str,
+    duration: impl FnOnce() -> Option<Duration>,
+) -> Result<Box<dyn Source + Send>>
+where
+    R: Read + Seek + Send + Sync + 'static,
+{
+    // Ogg files may contain Opus, which symphonia cannot decode.
+    if ext == "opus" || (matches!(ext, "ogg" | "oga") && is_ogg_opus(&mut input)?) {
+        return Ok(Box::new(OpusSource::new(input, duration())?));
+    }
     let mut builder = Decoder::builder()
-        .with_data(BufReader::new(file))
-        .with_byte_len(len)
+        .with_data(input)
         .with_seekable(true)
         .with_gapless(true);
+    if let Some(len) = byte_len {
+        builder = builder.with_byte_len(len);
+    }
     if !ext.is_empty() {
         builder = builder.with_hint(ext);
     }
-    let decoder = builder
-        .build()
-        .with_context(|| format!("cannot decode {}", path.display()))?;
-    Ok(Box::new(decoder))
+    Ok(Box::new(builder.build()?))
+}
+
+/// Check whether an Ogg stream starts with an Opus header, then rewind.
+fn is_ogg_opus<R: Read + Seek>(input: &mut R) -> Result<bool> {
+    let mut head = [0u8; 64];
+    let mut n = 0;
+    while n < head.len() {
+        match input.read(&mut head[n..])? {
+            0 => break,
+            k => n += k,
+        }
+    }
+    input.seek(SeekFrom::Start(0))?;
+    Ok(head[..n].windows(8).any(|w| w == b"OpusHead"))
 }

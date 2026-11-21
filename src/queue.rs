@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
+
+use crate::track::Track;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Repeat {
@@ -33,7 +33,7 @@ impl Repeat {
 /// (a permutation of track indices) and `pos` points into `order`.
 #[derive(Debug, Default)]
 pub struct Queue {
-    tracks: Vec<PathBuf>,
+    tracks: Vec<Track>,
     order: Vec<usize>,
     pos: Option<usize>,
     shuffle: bool,
@@ -41,7 +41,7 @@ pub struct Queue {
 }
 
 impl Queue {
-    pub fn tracks(&self) -> &[PathBuf] {
+    pub fn tracks(&self) -> &[Track] {
         &self.tracks
     }
 
@@ -62,12 +62,12 @@ impl Queue {
         self.pos.map(|p| self.order[p])
     }
 
-    pub fn current(&self) -> Option<&PathBuf> {
+    pub fn current(&self) -> Option<&Track> {
         self.current_index().map(|i| &self.tracks[i])
     }
 
     /// Replace the queue and make `start` the current track.
-    pub fn set(&mut self, tracks: Vec<PathBuf>, start: Option<usize>) {
+    pub fn set(&mut self, tracks: Vec<Track>, start: Option<usize>) {
         self.tracks = tracks;
         let start = start.filter(|&s| s < self.tracks.len());
         self.rebuild_order(start);
@@ -196,18 +196,25 @@ impl Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn queue(n: usize, start: usize) -> Queue {
         let mut q = Queue::default();
         q.set(
-            (0..n).map(|i| PathBuf::from(i.to_string())).collect(),
+            (0..n)
+                .map(|i| Track::Local(PathBuf::from(i.to_string())))
+                .collect(),
             Some(start),
         );
         q
     }
 
     fn name(q: &Queue) -> String {
-        q.current().unwrap().to_string_lossy().into_owned()
+        q.current()
+            .and_then(Track::local_path)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
     }
 
     #[test]
