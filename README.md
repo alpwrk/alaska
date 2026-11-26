@@ -23,7 +23,7 @@ Early-stage software (0.1.x): expect rough edges and breaking changes.
 ## Requirements
 
 alaska runs on **Linux only**: playback uses ALSA and the MPRIS integration
-needs D-Bus, so it does not build on macOS or Windows. Rust 1.85 or newer is
+needs D-Bus, so it does not build on macOS or Windows. Rust 1.89 or newer is
 required.
 
 | Distribution     | Packages                                    |
