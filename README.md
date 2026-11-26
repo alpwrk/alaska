@@ -3,18 +3,9 @@
 A simple, fast terminal music player for local files and OpenSubsonic servers
 (Navidrome and others), built around a file browser.
 
-```
-╭ ~/Music/Artist/Album ──────────╮╭ Queue (2/6) ──────────────────╮
-│01 Intro – Artist           1:12││  01 Intro – Artist        1:12│
-│02 Song – Artist            3:45││▶ 02 Song – Artist         3:45│
-│03 Other – Artist           4:01││  03 Other – Artist        4:01│
-╰────────────────────────────────╯╰───────────────────────────────╯
-╭─────────────────────────────────────────────────────────────────╮
-│ ▶ 02 Song – Artist  ·  Album                                    │
-│ 1:23 / 3:45  ━━━━━━━━━━━━━━━━━━━━━━━━──────────────────────────  │
-│ vol  80%  shuffle off  repeat all                               │
-╰─────────────────────────────────────────────────────────────────╯
-```
+Early-stage software (0.1.x): expect rough edges and breaking changes.
+
+![alaska browsing a music library](assets/screenshot.png)
 
 ## Features
 
@@ -29,10 +20,28 @@ A simple, fast terminal music player for local files and OpenSubsonic servers
 - MPRIS: media keys, `playerctl` and desktop widgets work
 - Remembers volume, shuffle/repeat, queue and position between runs (resumes paused)
 
-## Build
+## Requirements
 
-Requires Rust and the system libraries for ALSA and Opus (on Arch: `alsa-lib opus`).
-Install into `~/.cargo/bin` with `cargo install --path .`.
+alaska runs on **Linux only**: playback uses ALSA and the MPRIS integration
+needs D-Bus, so it does not build on macOS or Windows. Rust 1.85 or newer is
+required.
+
+| Distribution     | Packages                                    |
+|------------------|---------------------------------------------|
+| Arch             | `alsa-lib opus`                             |
+| Debian / Ubuntu  | `libasound2-dev libopus-dev pkg-config`     |
+| Fedora           | `alsa-lib-devel opus-devel pkgconf-pkg-config` |
+
+## Install
+
+```sh
+cargo install --git https://github.com/alpwrk/alaska
+```
+
+This installs the `alaska` binary into `~/.cargo/bin`. (alaska is not on
+crates.io yet.)
+
+For a local checkout:
 
 ```sh
 cargo build --release
@@ -81,9 +90,20 @@ Requests use Subsonic token authentication (salted MD5), so the password itself
 is never sent to the server. Switching modes pauses the current one; switching
 back resumes it paused at the same position.
 
+## Privacy
+
+alaska has no telemetry and talks only to the OpenSubsonic server you configure.
+Credentials are stored in plain text in `~/.config/alaska/config.toml` (mode
+600), so anyone who can read your home directory can read the password; use a
+dedicated Subsonic user if that matters to you.
+
 ## Files
 
 - `~/.config/alaska/config.toml` – OpenSubsonic login
 - `~/.local/state/alaska/state.json` – volume, modes, both queues and positions
 - `~/.cache/alaska/tags.json` – tag cache (invalidated by file modification time)
 - `~/.cache/alaska/stderr.log` – library warnings printed while the TUI runs
+
+## License
+
+MIT. See [LICENSE](LICENSE).
