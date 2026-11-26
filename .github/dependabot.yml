@@ -9,3 +9,6 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # The MSRV job pins an exact toolchain on purpose.
+      - dependency-name: "dtolnay/rust-toolchain"
