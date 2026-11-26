@@ -21,6 +21,11 @@ use anyhow::{Context, Result, bail};
 
 use crate::app::App;
 
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "alaska supports Linux only: it needs ALSA for playback and MPRIS (D-Bus) for media keys"
+);
+
 const USAGE: &str = "usage: alaska [DIRECTORY]";
 
 fn main() -> Result<()> {

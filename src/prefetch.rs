@@ -172,7 +172,7 @@ mod tests {
     fn drain(p: &mut Prefetch) -> usize {
         let start = Instant::now();
         let mut n = 0;
-        while let Some(s) = p.next() {
+        for s in p.by_ref() {
             if s != 0.0 {
                 n += 1;
             }
