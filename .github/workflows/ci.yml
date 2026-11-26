@@ -16,7 +16,7 @@ jobs:
     name: test (stable)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libopus-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
@@ -31,7 +31,7 @@ jobs:
     name: msrv (1.89)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libopus-dev pkg-config
       - uses: dtolnay/rust-toolchain@1.89.0
