@@ -2,6 +2,13 @@
 name = "alaska"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "A simple, fast terminal music player for local files and OpenSubsonic servers"
+repository = "https://github.com/alpwrk/alaska"
+readme = "README.md"
+license = "MIT"
+keywords = ["music", "tui", "audio", "subsonic", "player"]
+categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
 anyhow = "1.0.104"
